@@ -1,0 +1,9 @@
+node_modules/
+build/
+screenshots/
+financials.db
+*.log
+
+# Local Claude Code / agent tooling, not part of the server itself
+.claude/
+.agents/
