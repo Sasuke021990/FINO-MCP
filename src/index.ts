@@ -6,7 +6,8 @@ import { chromium, type Browser } from 'playwright';
 import { screenshotToolSchema, captureFinologyScreenshot } from './tools/screenshotTool.js';
 import express from 'express';
 import path from 'path';
-import { saveScreenshots, getScreenshots } from './db/sqlite.js';
+import fs from 'fs';
+import { saveScreenshots, getScreenshots, type ScreenshotRecord } from './db/sqlite.js';
 
 const SCREENSHOT_BASE_URL = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:8888';
 const REFRESH_ON_CACHE_HIT = ['Share_Price'];
@@ -80,6 +81,29 @@ class FinologyServer {
             }
         );
 
+        // Vision models can't fetch a URL themselves - the tool result has to
+        // carry the actual image bytes for the client to show/pass along.
+        const buildContent = (tickerFolder: string, screenshots: ScreenshotRecord[]) => {
+            const imageBlocks = screenshots.flatMap(({ fileName }) => {
+                const filePath = path.join(process.cwd(), 'screenshots', tickerFolder, fileName);
+                try {
+                    const data = fs.readFileSync(filePath).toString('base64');
+                    return [{ type: 'image' as const, data, mimeType: 'image/png' }];
+                } catch (err) {
+                    console.error(`Could not read ${filePath} for inline response:`, err);
+                    return [];
+                }
+            });
+
+            return [
+                {
+                    type: 'text' as const,
+                    text: `Screenshots for ${tickerFolder}.\n\n${JSON.stringify(screenshots, null, 2)}`
+                },
+                ...imageBlocks
+            ];
+        };
+
         server.setRequestHandler(ListToolsRequestSchema, async () => ({
             tools: [screenshotToolSchema],
         }));
@@ -127,14 +151,7 @@ class FinologyServer {
                         console.error(`Refresh failed for ${tickerFolder}, serving stale cache:`, refreshError);
                     }
                     const screenshots = getScreenshots(tickerFolder);
-                    return {
-                        content: [
-                            {
-                                type: "text",
-                                text: `Screenshots for ${tickerFolder}.\n\n${JSON.stringify(screenshots, null, 2)}`
-                            }
-                        ],
-                    };
+                    return { content: buildContent(tickerFolder, screenshots) };
                 }
 
                 const resultFiles = await captureFinologyScreenshot(this.browser, tickerSymbol);
@@ -143,14 +160,7 @@ class FinologyServer {
                 saveScreenshots(tickerFolder, resultFiles, SCREENSHOT_BASE_URL);
                 const screenshots = getScreenshots(tickerFolder);
 
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Screenshots for ${tickerFolder}.\n\n${JSON.stringify(screenshots, null, 2)}`
-                        }
-                    ],
-                };
+                return { content: buildContent(tickerFolder, screenshots) };
             } catch (error: any) {
                 console.error(`Screenshot capture failed:`, error);
                 return {
