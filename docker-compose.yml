@@ -10,10 +10,10 @@ services:
     # Make sure stdio is accessible (required for MCP stdio transport)
     stdin_open: true
     tty: true
-    # Host networking avoids all Docker bridge/NAT edge cases when reaching
-    # Ollama's NodePort on the same TrueNAS box - the container shares the
-    # host's network stack directly, so localhost really is the host's localhost.
-    # The app's Express server binds directly to the host's port 8888 as a result.
+    # Host networking so the app's Express server binds directly to the
+    # host's port 8888, avoiding Docker bridge/NAT edge cases.
     network_mode: host
     environment:
-      - OLLAMA_HOST=http://127.0.0.1:30068
+      # Base URL embedded in returned screenshot links - must be reachable by
+      # whatever client (local or remote) calls this MCP server.
+      - SCREENSHOT_BASE_URL=http://100.115.179.105:8888

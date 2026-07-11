@@ -8,7 +8,7 @@ import express from 'express';
 import path from 'path';
 import { saveScreenshots, getScreenshots } from './db/sqlite.js';
 
-const SCREENSHOT_BASE_URL = 'http://localhost:8888';
+const SCREENSHOT_BASE_URL = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:8888';
 const REFRESH_ON_CACHE_HIT = ['Share_Price'];
 
 class FinologyServer {
