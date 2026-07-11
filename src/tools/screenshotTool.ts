@@ -19,6 +19,9 @@ export const screenshotToolSchema = {
 };
 
 const LOCATORS = {
+    'CompanyEssentials_info': '#companyessentials',
+    'PriceSummary_info': '#mainContent_pricesummary',
+    'Share_Price': '#mainContent_divPrice',
     'Peer_info': '#peer > div > div',
     'ShareHolding_info': '#mainContent_ShareHolding > div > div',
     'ProsAndCons_info': '#mainContent_ProsAndCons',
@@ -31,23 +34,23 @@ const LOCATORS = {
     'BlogPosts_info': '#BlogPosts'
 };
 
+export const ALL_LOCATOR_NAMES = Object.keys(LOCATORS);
+
 export async function captureFinologyScreenshot(
     browser: Browser,
-    tickerSymbol: string
+    tickerSymbol: string,
+    locatorNames: string[] = ALL_LOCATOR_NAMES
 ): Promise<string[]> {
     const tickerFolder = tickerSymbol.toUpperCase();
     const screenshotsDir = path.join(process.cwd(), 'screenshots', tickerFolder);
-    
-    // Check cache
-    if (fs.existsSync(screenshotsDir)) {
-        const existingFiles = fs.readdirSync(screenshotsDir).filter(f => f.endsWith('.png'));
-        if (existingFiles.length > 0) {
-            console.error(`Cache hit for ${tickerFolder}. Found ${existingFiles.length} screenshots.`);
-            return existingFiles;
-        }
-    } else {
+
+    if (!fs.existsSync(screenshotsDir)) {
         fs.mkdirSync(screenshotsDir, { recursive: true });
     }
+
+    const targets = locatorNames
+        .map(name => [name, LOCATORS[name as keyof typeof LOCATORS]] as const)
+        .filter(([, selector]) => !!selector);
 
     let page: Page | null = null;
     const capturedFiles: string[] = [];
@@ -85,7 +88,7 @@ export async function captureFinologyScreenshot(
             document.head.appendChild(style);
         });
 
-        for (const [name, selector] of Object.entries(LOCATORS)) {
+        for (const [name, selector] of targets) {
             try {
                 const locator = page.locator(selector);
                 // Wait for up to 3 seconds for the element to be visible

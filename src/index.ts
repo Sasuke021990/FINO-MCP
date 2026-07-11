@@ -6,8 +6,10 @@ import { chromium, type Browser } from 'playwright';
 import { screenshotToolSchema, captureFinologyScreenshot } from './tools/screenshotTool.js';
 import express from 'express';
 import path from 'path';
-import { processScreenshotExtraction } from './services/extractionService.js';
-import { getFinancialData } from './db/sqlite.js';
+import { saveScreenshots, getScreenshots } from './db/sqlite.js';
+
+const SCREENSHOT_BASE_URL = 'http://localhost:8888';
+const REFRESH_ON_CACHE_HIT = ['Share_Price'];
 
 class FinologyServer {
     private browser: Browser | null = null;
@@ -22,15 +24,15 @@ class FinologyServer {
         // Serve the screenshots directory as static files
         this.app.use(express.static(screenshotsDir));
 
-        // API Endpoint for extracted financial data
-        this.app.get('/api/financials/:ticker', (req, res) => {
+        // API Endpoint for a ticker's captured screenshots
+        this.app.get('/api/screenshots/:ticker', (req, res) => {
             const ticker = req.params.ticker.toUpperCase();
             try {
-                const data = getFinancialData(ticker);
-                if (data) {
+                const data = getScreenshots(ticker);
+                if (data.length > 0) {
                     res.json(data);
                 } else {
-                    res.status(404).json({ error: "Financial data not found or still extracting." });
+                    res.status(404).json({ error: "No screenshots found for this ticker." });
                 }
             } catch (error: any) {
                 console.error(error);
@@ -95,20 +97,12 @@ class FinologyServer {
             const tickerFolder = tickerSymbol.toUpperCase();
 
             try {
-                // DB-first: if we already have extracted financial data for this
-                // ticker, return it immediately without touching the browser/LLM.
-                const cachedData = getFinancialData(tickerFolder);
-                if (cachedData) {
-                    console.error(`DB cache hit for ${tickerFolder}. Returning immediately.`);
-                    return {
-                        content: [
-                            {
-                                type: "text",
-                                text: `Returning cached financial data for ${tickerFolder}.\n\n${JSON.stringify(cachedData, null, 2)}`
-                            }
-                        ],
-                    };
-                }
+                // DB-first: if screenshots already exist for this ticker, only
+                // refresh the fast-changing sections (e.g. Share_Price) and
+                // serve the rest straight from the DB.
+                const existing = getScreenshots(tickerFolder);
+                const isCacheHit = existing.length > 0;
+                const locatorsToCapture = isCacheHit ? REFRESH_ON_CACHE_HIT : undefined;
 
                 // Ensure browser is ready
                 await this.setupBrowser();
@@ -117,21 +111,43 @@ class FinologyServer {
                     throw new Error("Browser failed to initialize");
                 }
 
-                console.error(`Capturing screenshot for ${tickerSymbol}...`);
+                console.error(
+                    isCacheHit
+                        ? `Cache hit for ${tickerFolder}. Refreshing: ${REFRESH_ON_CACHE_HIT.join(', ')}`
+                        : `No cached screenshots for ${tickerFolder}. Capturing all sections.`
+                );
+
+                if (isCacheHit) {
+                    // Best-effort refresh: if it fails, serve the stale cached
+                    // data instead of failing the whole call.
+                    try {
+                        const resultFiles = await captureFinologyScreenshot(this.browser, tickerSymbol, locatorsToCapture);
+                        saveScreenshots(tickerFolder, resultFiles, SCREENSHOT_BASE_URL);
+                    } catch (refreshError: any) {
+                        console.error(`Refresh failed for ${tickerFolder}, serving stale cache:`, refreshError);
+                    }
+                    const screenshots = getScreenshots(tickerFolder);
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `Screenshots for ${tickerFolder}.\n\n${JSON.stringify(screenshots, null, 2)}`
+                            }
+                        ],
+                    };
+                }
+
                 const resultFiles = await captureFinologyScreenshot(this.browser, tickerSymbol);
                 console.error(`Screenshots captured successfully for ${tickerFolder}`);
 
-                // Wait for extraction to finish so the tool always returns the
-                // structured data itself, regardless of cache state.
-                await processScreenshotExtraction(tickerSymbol, resultFiles);
-
-                const freshData = getFinancialData(tickerFolder) ?? {};
+                saveScreenshots(tickerFolder, resultFiles, SCREENSHOT_BASE_URL);
+                const screenshots = getScreenshots(tickerFolder);
 
                 return {
                     content: [
                         {
                             type: "text",
-                            text: `Fetched and extracted financial data for ${tickerFolder}.\n\n${JSON.stringify(freshData, null, 2)}`
+                            text: `Screenshots for ${tickerFolder}.\n\n${JSON.stringify(screenshots, null, 2)}`
                         }
                     ],
                 };
@@ -209,7 +225,7 @@ class FinologyServer {
     }
 
     async run() {
-        // Start express server (static screenshots + financials API + MCP over HTTP at /mcp)
+        // Start express server (static screenshots + screenshots API + MCP over HTTP at /mcp)
         this.httpServer = this.app.listen(8888, () => {
             console.error("Express server running on http://localhost:8888 (MCP endpoint: POST /mcp)");
         });
